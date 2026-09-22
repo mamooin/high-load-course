@@ -3,6 +3,10 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+prometheus/
+grafana/data/
+http-client.env.json
+.env
 
 ### STS ###
 .apt_generated
