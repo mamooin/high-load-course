@@ -138,10 +138,12 @@ class CountingRateLimiter(
 }
 
 fun makeRateLimiter(accountName: String, rate: Int, timeUnit: TimeUnit = TimeUnit.SECONDS): io.github.resilience4j.ratelimiter.RateLimiter {
+    val refreshPeriod = Duration.ofNanos(timeUnit.toNanos(1) / rate)
+    val timeoutDuration = Duration.ofNanos(timeUnit.toNanos(1))
     val config = RateLimiterConfig.custom()
-        .limitRefreshPeriod(if (timeUnit == TimeUnit.SECONDS) Duration.ofSeconds(1) else Duration.ofMinutes(1))
-        .limitForPeriod(rate)
-        .timeoutDuration(Duration.ofMillis(5))
+        .limitRefreshPeriod(refreshPeriod)
+        .limitForPeriod(1)
+        .timeoutDuration(timeoutDuration)
         .build()
 
     val rateLimiterRegistry = RateLimiterRegistry.of(config)
