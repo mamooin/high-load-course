@@ -12,6 +12,7 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Semaphore
 
 
 // Advice: always treat time as a Duration
@@ -37,6 +38,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val client = OkHttpClient.Builder().build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofMillis(1020))
+    private val semaphore = Semaphore(parallelRequests, true)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -52,28 +54,33 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
-            rateLimiter.tickBlocking()
+            semaphore.acquire()
+            try {
+                rateLimiter.tickBlocking()
 
-            val request = Request.Builder().run {
-                url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
-                post(emptyBody)
-            }.build()
+                val request = Request.Builder().run {
+                    url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
+                    post(emptyBody)
+                }.build()
 
-            client.newCall(request).execute().use { response ->
-                val body = try {
-                    mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
+                client.newCall(request).execute().use { response ->
+                    val body = try {
+                        mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+                    } catch (e: Exception) {
+                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                        ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
+                    }
+
+                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+
+                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                    }
                 }
-
-                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                }
+            } finally {
+                semaphore.release()
             }
         } catch (e: Exception) {
             when (e) {
