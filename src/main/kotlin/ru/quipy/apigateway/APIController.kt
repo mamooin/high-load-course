@@ -1,15 +1,28 @@
 package ru.quipy.apigateway
 
+import io.micrometer.core.instrument.MeterRegistry
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.core.env.Environment
+import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.*
+import org.springframework.web.server.ResponseStatusException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.util.*
 
 @RestController
-class APIController {
+class APIController(
+    meterRegistry: MeterRegistry,
+    environment: Environment,
+) {
+
+    private val paymentRequests = meterRegistry.counter(
+        "payment.requests",
+        "service",
+        environment.getRequiredProperty("payment.service-name")
+    )
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
@@ -56,14 +69,20 @@ class APIController {
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+        paymentRequests.increment()
         val paymentId = UUID.randomUUID()
-        val order = orderRepository.findById(orderId)?.let {
-            orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
-            it
-        } ?: throw IllegalArgumentException("No such order $orderId")
-
-
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+        val order = orderRepository.findById(orderId)
+            ?: throw IllegalArgumentException("No such order $orderId")
+        if (!orderPayer.pendingPayments.tryAcquire()) {
+            throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Payment capacity exhausted")
+        }
+        val createdAt = try {
+            orderRepository.save(order.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
+            orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+        } catch (e: Exception) {
+            orderPayer.pendingPayments.release()
+            throw e
+        }
         return PaymentSubmissionDto(createdAt, paymentId)
     }
 
