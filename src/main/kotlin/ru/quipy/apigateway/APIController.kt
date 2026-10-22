@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.util.*
+import java.util.concurrent.RejectedExecutionException
 
 @RestController
 class APIController(
@@ -73,14 +74,18 @@ class APIController(
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)
             ?: throw IllegalArgumentException("No such order $orderId")
-        if (!orderPayer.pendingPayments.tryAcquire()) {
+        if (!orderPayer.tryReservePayment(deadline)) {
             throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Payment capacity exhausted")
         }
         val createdAt = try {
             orderRepository.save(order.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             orderPayer.processPayment(orderId, order.price, paymentId, deadline)
         } catch (e: Exception) {
-            orderPayer.pendingPayments.release()
+            orderPayer.releasePayment()
+            orderRepository.save(order)
+            if (e is RejectedExecutionException) {
+                throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Payment capacity exhausted", e)
+            }
             throw e
         }
         return PaymentSubmissionDto(createdAt, paymentId)
