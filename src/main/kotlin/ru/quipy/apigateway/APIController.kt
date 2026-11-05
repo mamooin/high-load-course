@@ -69,12 +69,12 @@ class APIController(
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
         paymentRequests.increment()
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)
             ?: throw IllegalArgumentException("No such order $orderId")
-        if (!orderPayer.tryReservePayment(deadline)) {
+        if (!orderPayer.awaitPaymentPermission(deadline) || !orderPayer.tryReservePayment(deadline)) {
             throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Payment capacity exhausted")
         }
         val createdAt = try {

@@ -2,6 +2,7 @@ package ru.quipy.config
 
 import jakarta.annotation.PostConstruct
 import org.eclipse.jetty.http2.server.HTTP2CServerConnectionFactory
+import org.eclipse.jetty.server.ServerConnector
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.web.embedded.jetty.JettyServerCustomizer
@@ -66,12 +67,13 @@ class EventSourcingLibConfiguration {
         }
     }
 
-    @Bean // hack Jetty to tweak the number of possible https2 streams
+    @Bean
     fun jettyServerCustomizer(): JettyServletWebServerFactory {
         val jettyServletWebServerFactory = JettyServletWebServerFactory()
 
         val c = JettyServerCustomizer {
-            (it.connectors[0].getConnectionFactory("h2c") as HTTP2CServerConnectionFactory).maxConcurrentStreams = 10_000_000
+            (it.connectors[0] as ServerConnector).acceptQueueSize = 128
+            (it.connectors[0].getConnectionFactory("h2c") as? HTTP2CServerConnectionFactory)?.maxConcurrentStreams = 10_000_000
         }
 
         jettyServletWebServerFactory.serverCustomizers.add(c)
