@@ -122,13 +122,14 @@ class PaymentExternalSystemAdapterImpl(
                     if (attempt > 1) synchronized(rateLimiter) { waitingRetries-- }
                 }
 
+                val timeout = requestTimeout()
                 val request = Request.Builder()
-                    .url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
+                    .url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount&timeout=$timeout")
                     .post(emptyBody)
                     .build()
 
                 val call = client.newCall(request)
-                call.timeout().timeout(requestTimeout().toNanos(), TimeUnit.NANOSECONDS)
+                call.timeout().timeout(timeout.toNanos(), TimeUnit.NANOSECONDS)
                 call.timeout().deadlineNanoTime(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(deadline - now()))
                 if (attempt > 1) paymentRetries.increment()
                 val requestStartedAt = System.nanoTime()
@@ -159,7 +160,8 @@ class PaymentExternalSystemAdapterImpl(
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
 
-                return !body.result && responseCode in 200..299 && body.message == "Temporary error"
+                return !body.result && (responseCode == 408 ||
+                    responseCode in 200..299 && body.message == "Temporary error")
             } finally {
                 semaphore.release()
             }
